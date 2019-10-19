@@ -1,0 +1,732 @@
+﻿import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.net.Socket;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.Vector;
+
+import javax.swing.JOptionPane;
+
+public class Client extends Thread implements Protocol {
+	private ObjectInputStream ois = null;
+	private ObjectOutputStream oos = null;
+	private Socket s;
+	private SendData data;
+	private ClientForm cf;
+	private String myId;
+	private Login login;
+	private User user;
+	private int count = 0;
+	private BlackListForm blackListForm;
+	private OneOnOneChatPanel oneChat;
+
+	public Client(String s) {
+		login = new Login(this);
+		makeSocket(s);
+
+		new Thread() {
+			// 메세지를 기다리는 용도로 만들었음
+			@Override
+			public void run() {
+				System.out.println("메세지 기다리는중 ...");
+				try {
+					synchronized (this) {
+						while ((data = (SendData) ois.readObject()) != null) {
+							System.out.println("데이터 받아라");
+							System.out.println("OPCODE : " + data.getOpcode());
+							// /받은 샌드데이터 다 뜯어서 보여줌
+							if (data.getData() != null) {
+								for (int i = 0; i < data.getData().length; i++) {
+									System.out.println("Data[" + i + "] : " + data.getData()[i]);
+								}
+							}
+							switch (data.getOpcode()) {
+							case LOGIN_SUCCESS_PRIVATE:
+								sucessLogin(data);
+								break;
+							/*
+							 * 190703 이재영 추가
+							 */
+							case LOGIN_NOT_FOUND_ID:
+								Utils.showMsg(login, "아이디를 찾을 수 없습니다");
+								break;
+
+							case LOGIN_DUPLICATION:
+								Utils.showMsg(login, "이미 로그인 중인 아이디 입니다.");
+								break;
+
+							case LOGIN_WRONG_PASSWORD:
+								Utils.showMsg(login, "비밀번호가 틀렸슈");
+								break;
+
+							/* 이까지~~ */
+
+							case UPDATE_MEMBER_LIST:
+								System.out.println("업데이트 명령을 받았습니다");
+								// cf.getMp().updateList((String)data.getData()[0],(String)data.getData()[1]);
+								break;
+
+							case LOGIN_GET_SCATTTER_ORDER:
+								// 내가 로그인 했을때 대기실에 있는 사람들의 멤버패널 업데이트
+								// 행님 들어간다 맞을 준비해라.
+								System.out.println("받은 스캐터 data[0] : " + (User) data.getData()[0]);
+								cf.getMp().updateList((User) data.getData()[0]);
+								// 원도 추가 26 10:00 - 하 찝찝허다.
+								cf.getWp().updateWaitingRoom();
+								// cf.getWp().addChatRoomList((Vector<ChatRoom>)data.getData()[1]);
+
+								// 메소드 처리할래? ㅎㅎ?
+								break;
+
+							case ANNOUNCE_LOGOUT_INFO: // 안녕히 계세요 여러분. 전 이 세상의
+														// 모든 굴레와 속박을 벗어던지고 제
+														// 행복을 찾아 떠납니다. 여러분도
+														// 행복하세요!
+								// 1910621 15:15 추가
+								// 190624 11:30 숸도 수정
+								if (data.getData()[0].equals(myId)) {
+									System.exit(0);
+								} else {
+									cf.getMp().removeFromList((String) data.getData()[0]);
+								}
+								break;
+
+							case SUCCESS_OVERLAP_CHECK:
+								Utils.showMsg(login.getJoin(), "중복되지 않았습니다. 가입하이소");
+								login.getJoin().changeState();
+								break;
+
+							case JOIN_ALREADY_EXIST_ID:
+								Utils.showMsg(login.getJoin(), "이미 존재하는 회원입니다.");
+								break;
+
+							case JOIN_SUCCESS:
+								Utils.showMsg(login.getJoin(), "회원가입 성공");
+								break;
+
+							case FOUND_ID:
+								Utils.showMsg(login.getJoin(), "아이디 : " + (String) data.getData()[0]);
+								break;
+
+							case NOT_FOUND_ID:
+								cf.showMassege("일치하는 정보가 없습니다.");
+								break;
+
+							case FOUND_PW:
+								cf.showMassege("비밀번호 : " + (String) data.getData()[0]);
+								break;
+
+							case NOT_FOUND_INFO_PW:
+								cf.showMassege("일치하는 정보가 없습니다.");
+								break;
+
+							case SUCCESS_SEND_WATINGROOM_NORMAL_MSG:
+								System.out.println(data.getData()[0].toString());
+								String id = (String) data.getData()[0];
+								String msg = (String) data.getData()[1];
+								System.out.println(id + ":" + msg);
+								cf.getWp().showMsgInTa(id, msg);
+								break;
+
+							case SEND_WAITINGROOM_WHISPER_MSG:
+								String myId = (String) data.getData()[0];
+								String targetId = (String) data.getData()[1];
+								String whisperMsg = (String) data.getData()[2];
+								cf.getWp().showWhisperMsgInTa(myId, targetId, whisperMsg);
+								break;
+							case NO_JUPSOK_SO_CANT_WHISPER:
+								Utils.showMsg(cf, "대기실에 없는 사람입니다");
+								break;
+
+							case SUCCESS_SHOW_MY_PROFILE:
+								System.out.println("잘되는지 확인여");
+								successShowMyProfile(data);
+								break;
+
+							case SUCCESS_CREATE_CHATROOM:
+
+								// data = cr
+								sucessCreateChatRoom(data);
+
+								break;
+
+							case CREATE_GET_SCATTER_ORDER:
+								// 채팅방이 생겼으니 웨이팅룸 대기자 리스트 / 채팅방을 띄우는 UI에 변화가
+								// 있어야함(ChatRoom필요)
+
+								cf.getWp().addChatRoomList((ChatRoom) data.getData()[0]);
+
+								// 190626 손원도 수정 waitingRoomList 에서 삭제 해부러
+								cf.getMp().removeFromList((String) data.getData()[1]);
+								cf.getWp().setChatRoomPanel();
+								break;
+
+							case WITHDRAW_OK:
+								cf.showMassege("회원 탈퇴 성공!");
+								break;
+
+							case SUCCESS_SELF_MODIFY_PROFILE:
+								cf.showMassege("회원 정보가 수정 되었습니다.");
+								break;
+
+							case FAIL_SELF_MODIFY_PROFILE:
+								cf.showMassege("비밀번호가 일치하지 않습니다.");
+								break;
+
+							case SUCCESS_SHOW_OTHER_PROFILE:
+								successShowOtherProfile(data);
+								break;
+
+							case SUCCESS_ENTER_CHATROOM:
+								// data : ChatRoom
+								sucessEnterChatRoom(data);
+								break;
+							case FAIL_ENTER_CHATROOM_WRONG_PASSWORD:
+								Utils.showMsg(cf, "비밀번호 일치X 고로 입장X");
+								break;
+							case PASSWORD_INPUT_PLEASE:
+								String pw = JOptionPane.showInputDialog("비밀번호 입력ㄱ");
+								// data[0] : title
+								// data[1] : id
+								sendData(new SendData(PASSWORD_INPUT_DONE, pw, data.getData()[0], data.getData()[1]));
+								break;
+							case ENTER_GET_SCATTER_ORDER_IN_CHATROOM:
+								// data : id
+								// 손원도
+								// 대기방을 갱신해야지. 음음!!!
+								ChatRoom cr = (ChatRoom) data.getData()[1];
+								cf.getWp().updateCrList((ChatRoom) (data.getData()[1]), (User) (data.getData()[0]));
+								cf.getMpInChat().updateList((User) data.getData()[0]);
+
+								System.out.println("after -> update Cr List : " + cf.getWp().getCrList().toString());
+								cf.getCp().changeChatRoom(cr.getChatRoomUserList().size());
+								cf.getWp().setChatRoomPanel();
+								cf.getWp().refresh();
+
+								break;
+
+							case ENTER_GET_SCATTER_ORDER_IN_WAITINGROOM:
+								cf.getMp().removeFromList((User) data.getData()[0]);
+								cf.getWp().updateCrList((ChatRoom) (data.getData()[1]), (User) (data.getData()[0]));
+
+								System.out.println("after -> update Cr List : " + cf.getWp().getCrList().toString());
+								cf.getWp().setChatRoomPanel();
+								cf.getWp().refresh();
+
+								break;
+
+							// 0703 이재영
+							case OK_SUCESS_CHANGED_HEAD:
+
+								// data[0] = title
+								// data[1] = selectedId
+								// 채팅방내의 유저들이 받는 정보
+								String selectedId = (String) data.getData()[1];
+								cf.getCp().changeRoomHead(selectedId);
+								cf.getCp().resetButton();
+								break;
+
+							case SUCCESS_EXIT_CHATROOM :
+								// 0627 손원도
+								// data[0] = WaitingRoom
+								// data[1] = title
+								
+								WaitingRoom tempWr = (WaitingRoom)data.getData()[0];
+								String title = (String)data.getData()[1];
+								
+								cf.returnToWaitingRoom(tempWr);
+								cf.setNowState(true);
+
+								//0701 손원도
+								
+								sendData(new SendData(SUCCESS_EXIT_CHATROOM_PLEASE_SCATTER, getMyId(), title));
+								
+//								for(ChatRoom temp : cf.getWp().getCrList()) {
+//									if(temp.getTitle().equals(title)) {
+//										cf.getWp().getCrList().remove(temp);
+//									}
+//								}
+								
+								
+								break;
+								
+							case CHANGE_CHATROOM_HEAD_BEFORE_EXIT:
+								ChatRoom exitCr = (ChatRoom)data.getData()[0];
+								String exitId = (String)data.getData()[1];
+							
+								Utils.showMsg(cf, "나가기전에 방장을 선택하고 가시어요");
+								new ChangeHeadFrame(Client.this, exitCr,true);
+								
+								//sendData(new SendData(EXIT_CHATROOM, exitCr.getTitle(), exitId));
+								break;
+
+							case SUCCESS_EXIT_CHATROOM_SCATTER_TO_WAITINGROOM:
+								// 0627 손원도
+								cf.getWp().removeCrList((ChatRoom) (data.getData()[1]), (User) (data.getData()[0]));
+								cf.getMp().updateList((User) data.getData()[0]);
+								cf.getWp().setChatRoomPanel();
+								cf.getWp().refresh();
+								break;
+
+							case SUCCESS_EXIT_CHATROOM_SCATTER_TO_CHATROOM:
+								ChatRoom cr2 = (ChatRoom) data.getData()[1];
+
+								cf.getWp().removeCrList((ChatRoom) (data.getData()[1]), (User) (data.getData()[0]));
+								cf.getMpInChat().removeFromList((User) (data.getData()[0]));
+
+								System.out.println("after -> update Cr List : " + cf.getWp().getCrList().toString());
+								cf.getCp().changeChatRoom(cr2.getChatRoomUserList().size());
+								cf.getWp().setChatRoomPanel();
+								cf.getWp().refresh();
+								break;
+
+							// 손원도 추가
+							case SUCCESS_KICKOUT:
+								cf.showMassege("병진이 형은 나가있어. 뒤지기 싫으면");
+								break;
+
+							case YOU_ARE_KICKED:
+								tempWr = (WaitingRoom) data.getData()[0];
+								cf.showMassege("당신은 우리와 함께 갈 수 없습니다.");
+								cf.returnToWaitingRoom(tempWr);
+
+								break;
+
+							case NOT_EXIST_ID_FAIL_ADD_FRIEND:
+//								JOptionPane.showMessageDialog( // 정상욱 추가 06-24
+//																// 20:00
+//										null, "이미 탈퇴한 회원입니다");
+
+								cf.showMassege("이미 탈퇴한 회원입니다.");
+								break;
+
+							case OVERLAP_FRIEND:
+//								JOptionPane.showMessageDialog( // 정상욱 추가 06-24
+//																// 20:00 
+//										null, "이미 친구추가 되어있습니다.");
+
+								cf.showMassege("이미 친구추가 되어있습니다.");
+								break;
+
+							case ADD_FRIEND:
+								addFriend(data); // 정상욱 추가 06-24 20:00
+								break;
+
+							case RESPOND_NO_REQUSET_ADD_FRIEND:
+//								JOptionPane.showMessageDialog(null,
+//										"상대방이 친구추가를 거절하였습니다." // 정상욱 추가 06-24
+//																// 20:00
+//								);
+
+								cf.showMassege("상대방이 친구추가를 거절하였습니다.");
+								break;
+
+							case RESPOND_YES_REQUSET_ADD_FRIEND:
+								respondYesRequestAddFriend(data);
+								// 정상욱 추가 06-24 20:00
+								break;
+
+							case DELETE_FRIEND:
+								deleteFriend(data); // 정상욱 추가 06-24 24:00
+								break;
+
+							case ADD_BLACKLIST:
+//								JOptionPane.showMessageDialog(null,
+//										"블랙리스트에 추가되었습니다");
+								User tempTargetUser = (User)data.getData()[0];
+								user.addBlackList(tempTargetUser);
+								System.out.println("정신없는 상욱씨" + user.getBlackList().toString());
+								cf.showMassege("블랙리스트에 추가 되었습니다.");
+								break;
+
+							case OVERLAP_BLACKLIST:
+//								JOptionPane.showMessageDialog(null,
+//										"이미 블랙리스트에 추가되어있습니다.");
+
+								cf.showMassege("이미 블랙리스트에 추가되어있습니다.");
+								break;
+
+							case FAIL_ADD_BLACKLIST:
+//								JOptionPane.showMessageDialog(null,
+//										"이미 탈퇴한 회원입니다.");
+
+								cf.showMassege("이미 탈퇴한 회원입니다.");
+								break;
+
+							case SUCCESS_SHOW_BLACKLIST:
+								
+								//Vector<User> myBlackList = (Vector<User>) data.getData()[0];
+								blackListForm = new BlackListForm(Client.this, user.getBlackList()); /// 2019-06-26 와서 수정할부분
+								break;
+
+							case DELETE_BLACKLIST:
+								deleteBlackList(data);
+								break;
+
+							case REQUEST_ONEONONE_MSG: // 정상욱 추가 06-25 20:41
+								requestOneononeMsg(data);
+								break;
+
+							case FAIL_SEND_ONEONE_MSG:
+								failSendOneononeMsg(data);
+								break;
+
+							case SUCCESS_SEND_ONEONONE_MSG:
+								User user = (User) data.getData()[0];
+								User targetUser2 = (User) data.getData()[1];
+
+								oneChat = new OneOnOneChatPanel(Client.this, user, targetUser2);
+								break;
+
+							case SEND_ONEONONE_MSG:
+								sendOneononeMsg(data);
+								break;
+
+							case ONEONONECHAT_OUT:
+								oneononeChatOut(data);
+								break;
+
+							case MYPROFILE_OTHER_REFRESH:
+								System.out.println("정보수정이 상대한테 전달되나");
+								myProfileOtherRefresh(data);
+								break;
+
+							case MYPROFILE_WAITINGUSER_REFRESH:
+								myProfileWatingUserRefresh(data);
+								break;
+
+							case TRY_SEND_NOTE: // 쪽지보내기 (임준석 6,24일)
+								trySendNote(data);
+								break;
+
+							/*
+							 * 190702 이재영 수정
+							 */
+							case SUCCESSE_NOTE_SEND:
+								sucesseNoteSend(data);
+								break;
+
+							case SEND_NOTE_TO_ME:
+								break;
+
+							case SUCESS_MODIFY_ROOM_TITLE:
+								sucessModifyRoomTitle(data);
+								break;
+
+							case GET_SCATTER_MODIFY_ROOM_TITLE:
+								System.out.println("왔니>>???");
+								modifyChatRoomTitle(data);
+								break;
+
+							case REQUEST_SEND_CHATROOM_MSG:
+								System.out.println("메세지 요청을 받으십니까?");
+								// 해당채팅방의 ta에 메세지 표시
+								cf.getCp().showMessage(data);
+
+								break;
+
+							/*
+							 * 190702 이재영이 추가한 방장 바꾸기
+							 */
+
+							case SUCESSE_OPEN_NOTEBOX:
+								System.out.println(
+										"실례지만 거거거 어디 최씹니꺼?  : " + ((Vector<Note>) data.getData()[0]).toString());
+								cf.openNoteBox(data.getData()[0]);
+								break;
+							case OK_SHAKE_IT_BABY_ONE_ON_ONE:
+								String shakeId = (String) data.getData()[0];
+								oneChat.shakeItDogBaby(shakeId);
+								break;
+
+							case ANNOUNCE_NOTICE_MSG:
+								String msg1 = (String) data.getData()[0];
+								JOptionPane.showMessageDialog(null, "운영자로부터 알림" + msg1, "알림", JOptionPane.INFORMATION_MESSAGE);
+								break;
+							}
+						}
+					}
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+
+			}
+		}.start();
+
+	}
+
+	private void sucesseNoteSend(SendData data) {
+		String msg = (String) data.getData()[0];
+		String myId = (String) data.getData()[1];
+		String targetId = (String) data.getData()[2];
+
+		// 받을때 받는 나자신의 유저에 메세지 저장
+		getUser().addNote(new Note(myId, targetId, msg, Utils.currentTimeToString()));
+		new Messenger_Receive(this, msg, myId, targetId);
+	}
+
+	private void modifyChatRoomTitle(SendData data) {
+		String oriTitle = (String) data.getData()[0];
+		String changedTitle = (String) data.getData()[1];
+		cf.getWp().editChatRoomList(oriTitle, changedTitle);
+	}
+
+	private void sucessModifyRoomTitle(SendData data) {
+		System.out.println("이까지 오는교?");
+		String oriTitle = (String) data.getData()[0];
+		String changedTitle = (String) data.getData()[1];
+		cf.showMassege("방 타이틀이 " + changedTitle + "변경되었습니다");
+		sendData(new SendData(SCATTER_MODIFY_ROOM_TITLE_PLEASE, oriTitle, changedTitle));
+	}
+
+	/*
+	 * 190624 이재영이 추가함 ChatRoom객체의 정보로 cf에 cp표시
+	 */
+	// 190628 손원도가 챗룸 넘어오는값 수정함.
+	private void sucessEnterChatRoom(SendData data) {
+		Object[] dataArr = data.getData();
+		ChatRoom tempCr = (ChatRoom) dataArr[0];
+		System.out.println("이방에 누가누가 숨어있나???? " + tempCr.getChatRoomUserList());
+		User user = (User) dataArr[1];
+
+		tempCr.addChatRoomUser(user);
+		cf.createChatRoom(tempCr);
+		sendData(new SendData(ENTER_CHATROOM_SUCCESS_SCATTER_PLEASE, getMyId(), tempCr));
+	}
+
+	private void oneononeChatOut(SendData data) {
+		User user = (User) data.getData()[0];
+		User targetUser = (User) data.getData()[1];
+
+		oneChat.getChatArea().append(user + "님이 퇴장하였습니다.");
+		oneChat.getChatArea().setEditable(false);
+		oneChat.getChatField().setEditable(false);
+	}
+
+	private void myProfileWatingUserRefresh(SendData data) {
+		User user = (User) data.getData()[0];
+		User reFreshUser = (User) data.getData()[1];
+
+		cf.getMp().removeFromList(user);
+		cf.getMp().updateList(reFreshUser);
+	}
+
+	private void successSelfModifyProfile(SendData data) {
+		User User = (User) data.getData()[0];
+		User refreshUser = (User) data.getData()[1];
+		cf.getMp().removeFromList(user);
+		cf.getMp().updateList(refreshUser);
+		JOptionPane.showMessageDialog(null, "회원정보가 수정되었습니다.");
+
+	}
+
+	private void myProfileOtherRefresh(SendData data) {
+		User user = (User) data.getData()[0]; // 기존 유저정보
+		User user2 = (User) data.getData()[1];
+
+		cf.getFp().removeUI(user);
+		cf.getFp().updateUI(user2);
+	}
+
+	private void sendOneononeMsg(SendData data) {
+		System.out.println("채팅 상대방한태 잘던져지나");
+		User user = (User) data.getData()[0];
+		User targetUser = (User) data.getData()[1];
+		String msg = (String) data.getData()[2];
+
+		oneChat.getChatArea().append(user + " : " + msg + "\n");
+	}
+
+	private void failSendOneononeMsg(SendData data) {
+		User targetUser = (User) data.getData()[1];
+		JOptionPane.showMessageDialog(null, targetUser + " 님이 1:1대화를 거절하였습니다");
+	}
+
+	// 정상욱 추가 06-25 20:41
+
+	private void requestOneononeMsg(SendData data) {
+		User user = (User) data.getData()[0];
+		User targetUser = (User) data.getData()[1];
+		int result = JOptionPane.showConfirmDialog(null, user + "님께서 1:1대화를 요청합니다 수락하시겠습니까?", "1:1 대화요청",
+				JOptionPane.YES_NO_OPTION);
+		if (result == JOptionPane.YES_NO_OPTION) {
+			sendData(new SendData(SUCCESS_SEND_ONEONONE_MSG, user, targetUser));
+		} else {
+			sendData(new SendData(FAIL_SEND_ONEONE_MSG, user, targetUser));
+		}
+	}
+
+	// 정상욱 추가 06-24 20:00
+	private void respondYesRequestAddFriend(SendData data) {
+		User user = (User) data.getData()[0];
+
+		cf.getFp().updateUI(user);
+	}
+
+	private void deleteBlackList(SendData data) {
+		User targetUser = (User) data.getData()[0];
+		
+		user.getBlackList().remove(targetUser);
+		blackListForm.updateUi(user);
+	}
+
+	private void deleteFriend(SendData data) {
+		User targetUser = (User) data.getData()[0];
+		cf.getFp().removeUI(targetUser);
+
+	}
+
+	// 정상욱 추가 06-24 20:00
+	private void addFriend(SendData data) {
+		String targetId = (String) data.getData()[0];
+		String myId = (String) data.getData()[1];
+		String msg = (String) data.getData()[2];
+		new AddFriendY(Client.this, targetId, myId, msg);
+	}
+
+	private void sucessCreateChatRoom(SendData data) {
+		ChatRoom cr = (ChatRoom) data.getData()[0];
+		cf.createChatRoom(cr);
+		sendData(new SendData(CREATE_CAHTROOM_SUCESS_SCATTER_PLEASE, cr, getMyId()));
+		cf.getLblRoomInfo().setText(cr.getTitle());
+	}
+
+	private void sucessLogin(SendData data) {
+		/*
+		 * 190623 이재영이 수정함
+		 */
+		Object[] dataArr = data.getData();
+
+		myId = (String) dataArr[0];
+		WaitingRoom wr = (WaitingRoom) dataArr[1];
+		user = (User) dataArr[2];
+
+		cf = new ClientForm(Client.this, wr);
+
+		Vector<User> friendList = (Vector<User>) data.getData()[3]; // 2019-06-25
+																	// 정상욱 수정
+		// Vector<User> connetedUserList = (Vector<User>)data.getData()[3];
+		System.out.println("친구사이즈" + friendList.size());
+		int i = 0;
+		for (User user : friendList) {
+			System.out.println("카운트" + i);
+			cf.getFp().updateUI(user);
+			i++;
+		}
+
+		System.out.println("대기실 정보 내놔라 이녀석아!");
+		sendData(new SendData(LOGIN_SUCCESS_SCATTER_PLEASE, myId));
+
+		login.dispose();
+	}
+
+	// 쪽지보내기 임준석 6.24일 추가
+	private void trySendNote(SendData data) {
+		String msg = (String) data.getData()[0];
+		User user = (User) data.getData()[1];
+		User targetUser = (User) data.getData()[2];
+
+		new Messenger1(msg, this, user, targetUser);
+	}
+
+	public User getUser() {
+		return user;
+	}
+
+	public void setUser(User user) {
+		this.user = user;
+	}
+
+	public String getMyId() {
+		return myId;
+	}
+
+	public void setMyId(String myId) {
+		this.myId = myId;
+	}
+
+	public ClientForm getCf() {
+		return cf;
+	}
+
+	public void setCf(ClientForm cf) {
+		this.cf = cf;
+	}
+
+	private void successShowOtherProfile(SendData data) {
+		Object[] dataArr = data.getData();
+		user = (User) dataArr[0];
+		new ProfileForm(user, Client.this);
+
+	}
+
+	// 지워버렷 0624 손원도
+	// private void idNick(SendData data){
+	// Object[] dataArr = data.getData();
+	// Vector<String> idNick = (Vector<String>)dataArr[0];
+	// cf.setIdNick(idNick);
+	// }
+
+	private void successShowMyProfile(SendData data) {
+		Object[] dataArr = data.getData();
+		;
+		user = (User) dataArr[0];
+		new MyProfileForm(user, Client.this);
+		System.out.println(user.getId());
+		System.out.println(user.getNickname());
+		System.out.println(user.getName());
+		System.out.println(user.getEmail());
+	}
+
+	public void makeSocket(String ip) {
+		try {
+			s = new Socket(ip, 8080);
+			oos = new ObjectOutputStream(s.getOutputStream());
+			ois = new ObjectInputStream(s.getInputStream());
+			System.out.println(s.getInetAddress() + ": 연결됨");
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	// 클라이언트가 서버에 쓴다 -> 콘솔에 메세지 출력됨
+	public void sendData(SendData data) {
+		try {
+			oos.writeObject(data);
+			oos.flush();
+			// oos.reset();
+			// oos.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	// 클라이언트가 서버에 정보를 보냄
+	public void sendLoginInfo(SendData data) {
+		try {
+			oos.writeObject(data);
+			oos.flush();
+			// oos.reset();
+			// oos.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	public void logout() {
+		sendData(new SendData(LOGOUT, myId));
+	}
+
+	public static void main(String[] args) {
+		//String ip = JOptionPane.showInputDialog("아이피 입력하소");
+		String ip = "192.168.200.57";
+
+		new Client(ip);
+	}
+
+}
